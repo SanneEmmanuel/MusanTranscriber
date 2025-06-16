@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: musantranscriber
+    env: docker
+    plan: free
+    region: frankfurt  # or oregon / singapore, based on your preference
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - Dockerfile
+        - index.js
+        - transcriber.js
+        - OpenOMR/**
+        - package.json
+        - public/**
