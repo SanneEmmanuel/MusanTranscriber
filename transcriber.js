@@ -1,110 +1,98 @@
 // transcriber.js
-// MusanTranscriber - Professional Music Theory-Aware Staff to Solfa Converter
+// MusanTranscriber by Dr Sanne Karibo - with OpenOMR Integration
 
 const Tesseract = require('tesseract.js');
-const { fromPath } = require('pdf2pic');
+const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
-const sharp = require('sharp');
+const { fromPath } = require('pdf2pic');
+const { execFile } = require('child_process');
 
-// Professional music structure and theory
-const CHROMATIC_SCALE = [
-  'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
-];
-
-const MAJOR_SCALE_INTERVALS = [0, 2, 4, 5, 7, 9, 11]; // Relative semitone steps
-const SOLFA_SYLLABLES = ['do', 're', 'mi', 'fa', 'so', 'la', 'ti'];
-
-// Keys and their accidentals for reference (enharmonic equivalents included)
-const KEY_SIGNATURES = {
-  'C': [],
-  'G': ['F#'],
-  'D': ['F#', 'C#'],
-  'A': ['F#', 'C#', 'G#'],
-  'E': ['F#', 'C#', 'G#', 'D#'],
-  'B': ['F#', 'C#', 'G#', 'D#', 'A#'],
-  'F#': ['F#', 'C#', 'G#', 'D#', 'A#', 'E#'],
-  'C#': ['F#', 'C#', 'G#', 'D#', 'A#', 'E#', 'B#'],
-  'F': ['Bb'],
-  'Bb': ['Bb', 'Eb'],
-  'Eb': ['Bb', 'Eb', 'Ab'],
-  'Ab': ['Bb', 'Eb', 'Ab', 'Db'],
-  'Db': ['Bb', 'Eb', 'Ab', 'Db', 'Gb'],
-  'Gb': ['Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb'],
-  'Cb': ['Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb', 'Fb']
+const ENHARMONIC_EQUIVS = {
+  'B#': 'C', 'Cb': 'B',
+  'E#': 'F', 'Fb': 'E',
+  'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#'
 };
 
-function getEnharmonic(note) {
-  const enharmonics = {
-    'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#',
-    'Cb': 'B', 'Fb': 'E', 'E#': 'F', 'B#': 'C'
-  };
-  return enharmonics[note] || note;
-}
+const MAJOR_SCALES = {
+  'C':  ['C', 'D', 'E', 'F', 'G', 'A', 'B'],
+  'G':  ['G', 'A', 'B', 'C', 'D', 'E', 'F#'],
+  'D':  ['D', 'E', 'F#', 'G', 'A', 'B', 'C#'],
+  'A':  ['A', 'B', 'C#', 'D', 'E', 'F#', 'G#'],
+  'E':  ['E', 'F#', 'G#', 'A', 'B', 'C#', 'D#'],
+  'B':  ['B', 'C#', 'D#', 'E', 'F#', 'G#', 'A#'],
+  'F#': ['F#', 'G#', 'A#', 'B', 'C#', 'D#', 'E#'],
+  'C#': ['C#', 'D#', 'E#', 'F#', 'G#', 'A#', 'B#'],
+  'F':  ['F', 'G', 'A', 'Bb', 'C', 'D', 'E'],
+  'Bb': ['Bb', 'C', 'D', 'Eb', 'F', 'G', 'A'],
+  'Eb': ['Eb', 'F', 'G', 'Ab', 'Bb', 'C', 'D'],
+  'Ab': ['Ab', 'Bb', 'C', 'Db', 'Eb', 'F', 'G'],
+  'Db': ['Db', 'Eb', 'F', 'Gb', 'Ab', 'Bb', 'C'],
+  'Gb': ['Gb', 'Ab', 'Bb', 'Cb', 'Db', 'Eb', 'F'],
+  'Cb': ['Cb', 'Db', 'Eb', 'Fb', 'Gb', 'Ab', 'Bb']
+};
 
-function buildScale(key) {
-  const root = getEnharmonic(key);
-  const startIndex = CHROMATIC_SCALE.indexOf(root);
-  if (startIndex === -1) throw new Error(`Invalid key: ${key}`);
-  
-  const scale = MAJOR_SCALE_INTERVALS.map(i => CHROMATIC_SCALE[(startIndex + i) % 12]);
-  const solfaMap = {};
-  scale.forEach((note, idx) => {
-    solfaMap[note] = SOLFA_SYLLABLES[idx];
-  });
-  return solfaMap;
-}
+const SOLFA = ['do', 're', 'mi', 'fa', 'so', 'la', 'ti'];
 
 function normalizeNote(note) {
-  return getEnharmonic(note.replace('♯', '#').replace('♭', 'b'));
+  return ENHARMONIC_EQUIVS[note] || note;
 }
 
-// Simulated music OCR output (replace with actual parser integration)
-async function detectNotes(imagePath) {
-  return [
-    { note: 'G', accidental: '', octave: 4 },
-    { note: 'A', accidental: '', octave: 4 },
-    { note: 'B', accidental: '', octave: 4 },
-    { note: 'C', accidental: '', octave: 5 },
-    { note: 'D', accidental: '', octave: 5 }
-  ];
+function mapNoteToSolfa(note, key) {
+  const scale = MAJOR_SCALES[key];
+  const index = scale.findIndex(n => normalizeNote(n) === normalizeNote(note));
+  return index >= 0 ? SOLFA[index] : '?';
 }
 
 async function extractText(imagePath) {
-  const { data: { text } } = await Tesseract.recognize(imagePath, 'eng');
-  return text;
-}
-
-async function extractMusic(imagePath, key = 'C') {
-  const notes = await detectNotes(imagePath);
-  const solfaMap = buildScale(key);
-  return notes.map(n => {
-    const fullNote = normalizeNote(n.note + (n.accidental || ''));
-    return solfaMap[fullNote] || `[${fullNote}]`;
-  }).join(' ');
+  const result = await Tesseract.recognize(imagePath, 'eng', {
+    logger: m => console.log(m.status)
+  });
+  return result.data.text.trim();
 }
 
 async function convertPdfToImage(pdfPath) {
-  const outputPath = path.join(__dirname, 'temp.jpg');
-  const convert = fromPath(pdfPath, { density: 200, saveFilename: 'page', savePath: './' });
-  await convert(1);
-  return 'page.jpg';
+  const tempImagePath = `${pdfPath}.png`;
+  const converter = fromPath(pdfPath, {
+    density: 200,
+    saveFilename: path.basename(tempImagePath, '.png'),
+    savePath: path.dirname(tempImagePath),
+    format: 'png'
+  });
+  const res = await converter(1); // first page
+  return res.path;
+}
+
+function detectNotesWithPython(imagePath) {
+  return new Promise((resolve, reject) => {
+    const pythonScript = path.join(__dirname, 'OpenOMR/extract_notes.py');
+    execFile('python3', [pythonScript, imagePath], (error, stdout, stderr) => {
+      if (error) {
+        console.error('Python OMR Error:', stderr);
+        return reject(error);
+      }
+      const notes = stdout.trim().split(',');
+      resolve(notes);
+    });
+  });
 }
 
 async function transcribe(filePath, key = 'C') {
-  const ext = path.extname(filePath).toLowerCase();
-  let imagePath = filePath;
-
-  if (ext === '.pdf') {
-    imagePath = await convertPdfToImage(filePath);
+  let workingPath = filePath;
+  if (path.extname(filePath).toLowerCase() === '.pdf') {
+    workingPath = await convertPdfToImage(filePath);
   }
 
-  const text = await extractText(imagePath);
-  const solfa = await extractMusic(imagePath, key);
+  const lyrics = await extractText(workingPath);
+  const notes = await detectNotesWithPython(workingPath);
+  const solfa = notes.map(n => mapNoteToSolfa(n, key)).join(' - ');
 
-  if (ext === '.pdf') fs.unlinkSync(imagePath);
+  if (workingPath !== filePath) fs.unlinkSync(workingPath);
 
-  return `=== MUSAN TRANSCRIBER ===\nKey: ${key}\n\n=== SOLFA NOTATION ===\n${solfa}\n\n=== LYRICS / TEXT ===\n${text}`;
+  return `Key: ${key}
+Detected Notes: ${notes.join(', ')}
+Solfa: ${solfa}
+Lyrics/Text:\n${lyrics}`;
 }
 
 module.exports = { transcribe };
